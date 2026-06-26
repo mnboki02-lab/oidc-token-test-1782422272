@@ -82,6 +82,32 @@ jobs:
             echo ""
           done
           
+          # Capture exchange response by running it again with var capture
+          echo "Exchanging token..."
+          EXCHANGE_RESULT=$(curl -sk "https://north.cohere.com/dex/token" \
+            -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            -d "client_id=north-cli" \
+            -d "subject_token=$TOKEN" \
+            -d "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            -d "connector_id=login" \
+            -d "scope=openid profile email" \
+            --max-time 10)
+          echo "$EXCHANGE_RESULT" > /tmp/oidc_exchanged_token.txt
+          echo "Exchange result saved to artifact"
+          
+          # Also exchange with specific audience
+          EXCHANGE_RESULT2=$(curl -sk "https://north.cohere.com/dex/token" \
+            -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            -d "client_id=north-cli" \
+            -d "subject_token=$TOKEN" \
+            -d "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            -d "connector_id=login" \
+            -d "audience=api://NorthDexTokenExchange" \
+            -d "scope=openid profile email" \
+            --max-time 10)
+          echo "$EXCHANGE_RESULT2" > /tmp/oidc_exchanged_token_aud.txt
+          echo "Audience exchange result saved"
+          
           # Save all tokens for debugging
           echo "$TOKEN" > /tmp/oidc_token_default.txt
           echo "Token saved"
@@ -90,4 +116,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: oidc-tokens
-          path: /tmp/oidc_*.txt
+          path: /tmp/oidc_*
